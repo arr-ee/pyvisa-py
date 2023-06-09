@@ -144,6 +144,7 @@ def receive_exact(sock: socket.socket, recv_len: int) -> bytes:
     that a call to select indicated that data is available.
     returns a bytearray containing the received data.
     """
+
     recv_buffer = bytearray(recv_len)
     receive_exact_into(sock, recv_buffer)
     return recv_buffer
@@ -235,7 +236,7 @@ class RxHeader:
                 else b""
             )
             raise RuntimeError(
-                "expected message type '%s', received '%s%s'"
+                "expected message type '%s', received '%s(%s)'"
                 % (expected_message_type, self.msg_type, payload)
             )
 
@@ -510,7 +511,11 @@ class Instrument:
                     # truncate to the actual number of bytes received
                     recv_buffer = recv_buffer[:bytes_recvd]
                     break
-                self._msg_type, self._payload_remaining = self._next_data_header()
+                try:
+                    self._msg_type, self._payload_remaining = self._next_data_header()
+                except TimeoutError as e:
+                    self._expected_message_id = None
+                    raise e
 
             request_size = min(self._payload_remaining, max_len - bytes_recvd)
             receive_exact_into(self._sync, view[:request_size])
