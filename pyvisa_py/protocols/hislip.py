@@ -8,6 +8,10 @@ import socket
 import struct
 import time
 from typing import Dict, Optional, Tuple
+import structlog
+from structlog.contextvars import bind_contextvars
+
+log = structlog.stdlib.get_logger()
 
 PORT = 4880
 
@@ -462,6 +466,8 @@ class Instrument:
         to not exceed max_payload_size.
         """
         # print(f"send({data=})")  # uncomment for debugging
+        log.debug("hislip.send")
+
         data_view = memoryview(data)
         num_bytes_to_send = len(data)
         max_payload_size = self._max_msg_size - HEADER_SIZE
@@ -487,6 +493,15 @@ class Instrument:
         Terminate after max_len bytes or after receiving a DataEnd message
         """
 
+        structlog.contextvars.clear_contextvars()
+        bind_contextvars(
+            message_id=self._message_id,
+            last_message_id=self._last_message_id,
+            expected_message_id=self._expected_message_id,
+            msg_type=self._msg_type,
+            payload_remaining=self._payload_remaining,
+        )
+        log.debug("hislip.receive")
         # print(f"receive({max_len=})")  # uncomment for debugging
         # if we aren't already receiving, initialize the _expected_message_id
         # and the payload length
@@ -494,6 +509,12 @@ class Instrument:
             self._expected_message_id = self._last_message_id
             self._msg_type = ""
             self._payload_remaining = 0
+            bind_contextvars(
+                expected_message_id=self._expected_message_id,
+                msg_type=self._msg_type,
+                payload_remaining=self._payload_remaining,
+            )
+            log.debug("hislip.receive: adjust ids")
 
         # receive data, terminating after len(recv_buffer) bytes or
         # after receiving a DataEnd message.
@@ -504,15 +525,23 @@ class Instrument:
         recv_buffer = bytearray(max_len)
         view = memoryview(recv_buffer)
         bytes_recvd = 0
+        bind_contextvars(bytes_recvd=bytes_recvd)
 
         while bytes_recvd < max_len:
+            log.debug("hislip.receive: loop iteration start")
             if self._payload_remaining <= 0:
                 if self._msg_type == "DataEnd":
                     # truncate to the actual number of bytes received
                     recv_buffer = recv_buffer[:bytes_recvd]
                     break
+
                 try:
                     self._msg_type, self._payload_remaining = self._next_data_header()
+                    bind_contextvars(
+                        msg_type=self._msg_type,
+                        payload_remaining=self._payload_remaining,
+                    )
+                    log.debug("hislip.receive: data header received")
                 except TimeoutError as e:
                     self._expected_message_id = None
                     raise e
@@ -523,9 +552,14 @@ class Instrument:
             bytes_recvd += request_size
             view = view[request_size:]
 
+            bind_contextvars(
+                bytes_recvd=bytes_recvd, payload_remaining=self._payload_remaining
+            )
+
         if bytes_recvd > max_len:
             raise MemoryError("scribbled past end of recv_buffer")
 
+        log.debug("hislip.receive: check for RMT")
         # if there is no data remaining, set the RMT flag and set the
         # _expected_message_id to None
         if self._payload_remaining == 0 and self._msg_type == "DataEnd":
@@ -547,7 +581,9 @@ class Instrument:
         message_id, and return the msg_type and payload_length.
         """
         while True:
+            log.debug("hislip._next_data_header: loop iteration start")
             header = RxHeader(self._sync)
+            log.debug("hislip._next_data_header", header=header.__dict__)
 
             if header.msg_type in ("Data", "DataEnd"):
                 # When receiving Data messages if the MessageID is not 0xffff ffff,
@@ -565,6 +601,7 @@ class Instrument:
                     break
 
             # we're out of sync.  flush this message and continue.
+            log.debug("hislip._next_data_header: flush message")
             receive_flush(self._sync, header.payload_length)
 
         return header.msg_type, header.payload_length

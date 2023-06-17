@@ -7,6 +7,45 @@
 
 """
 import sys
+from structlog import configure, stdlib, processors
+from structlog.contextvars import merge_contextvars
+
+configure(
+    wrapper_class=stdlib.BoundLogger,
+    logger_factory=stdlib.LoggerFactory(),
+    cache_logger_on_first_use=True,
+    processors=[
+        merge_contextvars,
+        stdlib.filter_by_level,
+        # Add the name of the logger to event dict.
+        stdlib.add_logger_name,
+        # Add log level to event dict.
+        stdlib.add_log_level,
+        # Perform %-style formatting.
+        stdlib.PositionalArgumentsFormatter(),
+        # Add a timestamp in ISO 8601 format.
+        processors.TimeStamper(fmt="iso"),
+        # If the "stack_info" key in the event dict is true, remove it and
+        # render the current stack trace in the "stack" key.
+        processors.StackInfoRenderer(),
+        # If the "exc_info" key in the event dict is either true or a
+        # sys.exc_info() tuple, remove "exc_info" and render the exception
+        # with traceback into the "exception" key.
+        processors.format_exc_info,
+        # If some value is in bytes, decode it to a unicode str.
+        processors.UnicodeDecoder(),
+        # Render the final event dict as JSON.
+        processors.KeyValueRenderer(
+            sort_keys=True,
+            key_order=[
+                "level",
+                "timestamp",
+                "logger",
+                "event",
+            ],
+        ),
+    ],
+)
 
 if sys.version_info >= (3, 8):
     from importlib.metadata import PackageNotFoundError, version
