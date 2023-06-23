@@ -98,7 +98,7 @@ class TestHislip(unittest.TestCase):
         logger.info(pprint.pformat(inst.__dict__))
         try:
             logger.info(f"POST-OPC: {inst.receive()!r}")
-        except TimeoutError as e:
+        except socket.timeout as e:
             logger.info("POST-OPC: timeout")
         time.sleep(10)
         logger.info(pprint.pformat(inst.__dict__))

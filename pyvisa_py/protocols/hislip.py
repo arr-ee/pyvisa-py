@@ -542,7 +542,7 @@ class Instrument:
                         payload_remaining=self._payload_remaining,
                     )
                     log.debug("hislip.receive: data header received")
-                except TimeoutError as e:
+                except socket.timeout as e:
                     self._expected_message_id = None
                     raise e
 
