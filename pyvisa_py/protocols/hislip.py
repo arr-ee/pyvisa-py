@@ -510,7 +510,11 @@ class Instrument:
                     # truncate to the actual number of bytes received
                     recv_buffer = recv_buffer[:bytes_recvd]
                     break
-                self._msg_type, self._payload_remaining = self._next_data_header()
+                try:
+                    self._msg_type, self._payload_remaining = self._next_data_header()
+                except socket.timeout as e:
+                    self._expected_message_id = None
+                    raise e
 
             request_size = min(self._payload_remaining, max_len - bytes_recvd)
             receive_exact_into(self._sync, view[:request_size])
