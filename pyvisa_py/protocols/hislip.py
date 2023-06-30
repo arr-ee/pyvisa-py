@@ -400,7 +400,7 @@ class Instrument:
         self.keepalive = False
         self.timeout = timeout
         self._rmt = 0
-        self._expected_message_id: Optional[int] = None
+        self.__expected_message_id: Optional[int] = None
         self._message_id = 0xFFFF_FF00
         self._last_message_id: Optional[int] = None
         self._msg_type: str = ""
@@ -434,6 +434,18 @@ class Instrument:
     @max_msg_size.setter
     def max_msg_size(self, size: int) -> None:
         self._max_msg_size = self.async_maximum_message_size(size)
+
+    @property
+    def _expected_message_id(self) -> Optional[int]:
+        """MessageID of the message for which we expect a response"""
+        return self.__expected_message_id
+
+    @_expected_message_id.setter
+    def _expected_message_id(self, message_id: Optional[int]) -> None:
+        """Re-set expected message id and related attributes"""
+        self.__expected_message_id = message_id
+        self._payload_remaining = 0
+        self._msg_type = ""
 
     @property
     def keepalive(self) -> bool:
@@ -487,12 +499,6 @@ class Instrument:
         """
 
         # print(f"receive({max_len=})")  # uncomment for debugging
-        # if we aren't already receiving, initialize the _expected_message_id
-        # and the payload length
-        if self._expected_message_id is None:
-            self._expected_message_id = self._last_message_id
-            self._msg_type = ""
-            self._payload_remaining = 0
 
         # receive data, terminating after len(recv_buffer) bytes or
         # after receiving a DataEnd message.
@@ -510,11 +516,7 @@ class Instrument:
                     # truncate to the actual number of bytes received
                     recv_buffer = recv_buffer[:bytes_recvd]
                     break
-                try:
-                    self._msg_type, self._payload_remaining = self._next_data_header()
-                except socket.timeout as e:
-                    self._expected_message_id = None
-                    raise e
+                self._msg_type, self._payload_remaining = self._next_data_header()
 
             request_size = min(self._payload_remaining, max_len - bytes_recvd)
             receive_exact_into(self._sync, view[:request_size])
@@ -714,19 +716,29 @@ class Instrument:
         self._last_message_id = self._message_id
         self._message_id = (self._message_id + 2) & 0xFFFF_FFFF
 
+        # Per section 3.1.2,
+        # > When the client sends Data, DataEND or Trigger, if there are any whole or partial server messages
+        # > that have been validated per rules 1 and 2 and buffered, they shall be cleared.
+        #
+        # By setting `_expected_message_id`, we ensure that responses for previous messages that have not been
+        # read will be discarded
+        self._expected_message_id = self._last_message_id
+
     def _send_data_packet(self, payload: bytes) -> None:
         """send a Data packet on the sync channel"""
         send_msg(self._sync, "Data", self._rmt, self._message_id, payload)
         self._rmt = 0
-        self._last_message_id = self._message_id
+        self._last_message_id = self._expected_message_id = self._message_id
         self._message_id = (self._message_id + 2) & 0xFFFF_FFFF
+        self._expected_message_id = self._last_message_id
 
     def _send_data_end_packet(self, payload: bytes) -> None:
         """send a DataEnd packet on the sync channel"""
         send_msg(self._sync, "DataEnd", self._rmt, self._message_id, payload)
         self._rmt = 0
-        self._last_message_id = self._message_id
+        self._last_message_id = self._expected_message_id = self._message_id
         self._message_id = (self._message_id + 2) & 0xFFFF_FFFF
+        self._expected_message_id = self._last_message_id
 
     def fatal_error(self, error: str, error_message: str = "") -> None:
         err_msg = (error_message or error).encode()
